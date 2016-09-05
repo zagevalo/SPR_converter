@@ -135,7 +135,7 @@ int main(int argc, char **argv) {
 		spr_decompress(SrcBuf, pic_info.size, DestBuf, final_size);
 
 		fstream out_file;
-		string out_file_name = "pic_" + to_string(i);
+		string out_file_name = "pic_" + to_string(i) + ".bmp";
 		out_file.open(out_file_name.c_str(), ios_base::out | ios_base::binary);
 		out_file.imbue(locale::classic());
 
