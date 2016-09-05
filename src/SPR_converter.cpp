@@ -9,6 +9,9 @@
 #include <fstream>
 #include <string>
 
+#include "data_structs.h"
+#include "decoder.h"
+
 using namespace std;
 
 const string SPR_FILE_SIGNATURE("SEGA SPRED 02.0M");
@@ -22,55 +25,7 @@ int main(int argc, char **argv) {
 
 	string input_file_path = argv[1];
 
-	struct spr_block_index {
-		unsigned int offset; // File offset
-		unsigned int size; // File size
-		unsigned int type; // Type of file
-		unsigned int reserve; // Always zero
-	};
-
-	struct spr_index {
-		char signature[16];
-		spr_block_index first_block_idx;
-		spr_block_index image_block_idx;
-		spr_block_index third_block_idx;
-		spr_block_index fourth_block_idx;
-		spr_block_index fifth_block_idx;
-	};
-
-	struct data_block_header {
-		unsigned short pic_count; // Total number of pics
-		unsigned short var2;
-		unsigned short var3;
-		unsigned short var4;
-		unsigned int var5;
-		unsigned int var6;
-	};
-
-	struct spr_subpic_info {
-		unsigned short width;
-		unsigned short height;
-		unsigned short var3;
-		unsigned short var4;
-		unsigned int offset; // Offset of the image, from the end of the index
-		unsigned int size;
-	};
-
-	struct spr_data_block {
-			data_block_header db_header;
-			char* data;
-		};
-
-	//streampos spr_file_size;
-	//string signature("");
-
-	//char* mem_buffer;
-	//char* spr_index_entry;
-	//char* spr_pic_info_entry;
-	//char* spr_subpic_info_entry;
-
 	fstream spr_file;
-	//spr_file.open(input_file_path.c_str(), std::fstream::in | std::fstream::binary | std::fstream::ate);
 	spr_file.open(input_file_path.c_str(), fstream::in | fstream::binary);
 
 	spr_block_index idx = {0, 0, 0, 0};
@@ -97,8 +52,6 @@ int main(int argc, char **argv) {
 	else {
 		cout << "ERROR: Can't open file!!!" << endl;
 	}
-
-	//spr_file.close();
 
 	cout << "Checking input file signature..." << endl;
 	cout << "Read signature: " << spr_idx.signature << endl;
@@ -132,35 +85,77 @@ int main(int argc, char **argv) {
 	spr_file.seekg(spr_idx.image_block_idx.offset, fstream::beg);
 
 	data_block_header db_hdr = {0, 0, 0, 0, 0, 0};
-	spr_data_block dat_block = {db_hdr, nullptr};
 	spr_subpic_info pic_info = {0, 0, 0, 0, 0, 0};
 
-	spr_file.read((char *)&dat_block.db_header, sizeof(dat_block.db_header));
+	spr_file.read((char *)&db_hdr, sizeof(db_hdr));
 
-	dat_block.db_header.pic_count = __builtin_bswap16(dat_block.db_header.pic_count);
+	db_hdr.pic_count = __builtin_bswap16(db_hdr.pic_count);
 
-	cout << "Num of pic files: " << dat_block.db_header.pic_count << endl;
+	cout << "Num of pic files: " << db_hdr.pic_count << endl;
 
 	//spr_file.seekg(sizeof(dat_block.db_header), fstream::cur);
 
-	for (int i=1; i<=dat_block.db_header.pic_count; i++) {
+	for (int i=1; i<=db_hdr.pic_count; i++) {
 		spr_file.read((char *)&pic_info, sizeof(pic_info));
+
+		pic_info.width = __builtin_bswap16(pic_info.width);
+		pic_info.height = __builtin_bswap16(pic_info.height);
+		pic_info.offset = __builtin_bswap32(pic_info.offset);
+		pic_info.size = __builtin_bswap32(pic_info.size);
+
+		cout << endl;
+		cout << "Pic " << i << ": " << endl;
+		cout << "Width: " << hex << pic_info.width << endl;
+		cout << "Height: " << hex << pic_info.height << endl;
+		cout << "Offset: " << hex << pic_info.offset << endl;
+		cout << "Size: " << hex << pic_info.size << endl;
+		cout << endl;
 
 		int cur_offset = spr_file.tellg();
 
 		int data_offset = spr_idx.image_block_idx.offset +
-					sizeof(dat_block.db_header) +
-					__builtin_bswap32(pic_info.offset);
+				sizeof(db_hdr) +
+				(db_hdr.pic_count * sizeof(db_hdr)) + pic_info.offset;
 
-		cout << endl;
-		cout << "Pic " << i << ": " << endl;
-		cout << "Width: " << __builtin_bswap16(pic_info.width); cout << endl;
-		cout << "Height: " << __builtin_bswap16(pic_info.height); cout << endl;
-		cout << "Offset: " << __builtin_bswap32(pic_info.offset); cout << endl;
-		cout << "Size: " << __builtin_bswap32(pic_info.size); cout << endl;
-		cout << endl;
+		cout << "sizeof(db_hdr): " << hex << sizeof(db_hdr) << endl;
+		cout << "data_offset: " << hex << data_offset << endl;
 
 		spr_file.seekg(data_offset, fstream::beg);
+
+		//int final_size = (pic_info.width * pic_info.height * 16) / 8;
+		int final_size = ((pic_info.width * 16 + 31) / 32 ) * 4 * pic_info.height;
+		char *DestBuf = new char[final_size];
+		char *SrcBuf = new char[pic_info.size];
+
+		spr_file.read(SrcBuf, pic_info.size);
+
+		//cout << "sizeof(SrcBuf): " << sizeof(&SrcBuf) << endl;
+		cout << "final_size: " << hex << final_size << endl;
+
+		spr_decompress(SrcBuf, pic_info.size, DestBuf, final_size);
+
+		fstream out_file;
+		string out_file_name = "pic_" + to_string(i);
+		out_file.open(out_file_name.c_str(), ios_base::out | ios_base::binary);
+		out_file.imbue(locale::classic());
+
+		// Write bmp header
+		bmp_header out_file_header;
+		out_file_header.size = 0x36 + final_size;
+		out_file_header.dib_hdr.img_height = pic_info.height;
+		out_file_header.dib_hdr.img_width = pic_info.width;
+		out_file_header.dib_hdr.size_of_raw_bitmap_data = final_size;
+		out_file.put('B');
+		out_file.put('M');
+		out_file.write((char *)&out_file_header, sizeof(out_file_header));
+
+		// Write img data
+		out_file.write(DestBuf, final_size);
+
+		out_file.close();
+
+		delete SrcBuf;
+		delete DestBuf;
 
 		spr_file.seekg(cur_offset, fstream::beg);
 	}
